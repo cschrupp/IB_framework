@@ -26,15 +26,15 @@ for line in requirements:
     else:
         required.append(line)
 
-
-
 setup(
     name='B26B3',
     version='0.0.26-beta+3',
-    packages=['mods'],
     url='https://github.com/cschrupp/IBframework.beta',
     license='MIT',
-    author='Carlos',
+    author='Carlos Schrupp',
     author_email='cschrupp@hotmail.com',
-    description='IB Framework - Algo Trading Framework based on backtrader'
+    description='IB Framework - Algo Trading Framework based on backtrader',
+    packages=find_packages(),
+    install_requires=required,
+    dependency_links=dependency_links
 )
