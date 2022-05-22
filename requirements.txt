@@ -10,5 +10,3 @@ rich==12.4.1
 schedule==1.1.0
 scipy==1.7.3
 setuptools==61.2.0
-# ibpy2==0.8.0
-ibapi==9.81.1post1
