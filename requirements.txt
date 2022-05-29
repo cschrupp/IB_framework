@@ -1,6 +1,7 @@
 aiogram==2.20
 backtrader @ git+https://github.com/cschrupp/backtrader.git#egg=backtrader'
 btplotting @ git+https://github.com/cschrupp/btplotting.git#egg=btplotting'
+ibPy @ git+https://github.com/cschrupp/IbPy.git#egg=ibPy'
 empyrical==0.5.5
 ib_insync==0.9.70
 pandas==1.3.5
