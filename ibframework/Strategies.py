@@ -151,7 +151,8 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         ("osc_ob_exit", None),
         ("osc_os_exit", None),
         ("size", None),
-        ("percent_sizer", None)
+        ("percent_sizer", None),
+        ("watchdog_market", None)
     )
 
     def log(self, txt, dt=None):
@@ -163,15 +164,18 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             print('%s, %s' % (dt.isoformat(), txt))
 
     def restart(self):
+        print("**********USING RESTART METHOD************")
         strat = self.p.strat
         ibi = ib_insync.IB()
         connected = utils.ib_connect(ibi)
         if connected:
+            print("**********USING RESTART METHOD************")
             ibi.disconnect()
             self.cerebro.runstop()
             tm.sleep(5)
             live = subprocess.Popen(['start', "python", "LiveD.py", strat], shell=True)
             print(strat, "Running - Pid: ", live.pid)
+            print("**********USING RESTART METHOD************")
         else:
             self.cerebro.runstop()
 
@@ -202,19 +206,22 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             print('*' * 5, 'STORE NOTIF:', msg)
 
             if hasattr(msg, 'errorMsg'):
-                print('errorMsg detected', getattr(msg, 'errorMsg'))
-                if getattr(msg, 'errorMsg') == "WinError 10054":
-                    print('errorCode 502 WinError 10054')
-                    self.restart()
+                if hasattr(msg.errorMsg, 'args'):
+                    print('errorMsg detected', msg.errorMsg.args[0])
+                    if msg.errorMsg.args[0] == 10054:
+                        print('Ending IB Framework instance')
+                        self.cerebro.runstop()
 
             if hasattr(msg, 'errorCode'):
                 print('errorCode detected', getattr(msg, 'errorCode'))
                 if getattr(msg, 'errorCode') == 504:
                     print('errorCode 504')
-                    self.restart()
+                    print('Ending IB Framework instance')
+                    self.cerebro.runstop()
                 elif getattr(msg, 'errorCode') == 1100:
                     print('errorCode 1100')
-                    self.restart()
+                    print('Ending IB Framework instance')
+                    self.cerebro.runstop()
 
             # if "errorMsg=Not connected" in msg:
             #    connection = False
@@ -222,9 +229,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
     def notify_timer(self, timer, when, *args, **kwargs):
         print("*******************************************************")
-        print('strategy notify_timer with tid {}'.
-              format(timer.p.tid))
-        self.restart()
+        print(f'strategy notify_timer with tid {timer.p.tid}')
+        print("*********************RESTARTING********************")
+        #self.restart()
 
     def __init__(self):
         # Load config values
@@ -245,14 +252,21 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         self.reset_time = config.params.watchdog.reset_time
         self.live_test = config.params.watchdog.live_test
         self.cycle_mult = config.params.watchdog.cycle_mult
+        self.market = config.get_strategy_parameter(self.strategy, "watchdog_market")
+        self.early_trading = config.params.watchdog.early_trading
+        self.late_trading = config.params.watchdog.late_trading
+        self.tzdata = config.params.main.timezone
 
         if self.mode == "live":
-            timer_kwargs = {"reset_time": self.reset_time,
-                            "live_test": self.live_test,
-                            "cycle_mult": self.cycle_mult,
-                            "strategy": self.strategy}
-
-            self.add_rttimer(time(8, 0), **timer_kwargs) # time(15, 30)
+            self.add_reset_timer(reset_time=self.reset_time,
+                                 live_test=self.live_test,
+                                 cycle_mult=self.cycle_mult,
+                                 market=self.market,
+                                 early_trading=self.early_trading,
+                                 late_trading=self.late_trading,
+                                 strategy=self.strategy,
+                                 tzdata=self.tzdata
+                                 )
 
         """
         Initialize SQLite database
@@ -375,6 +389,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         self.trade_open = dict()
         self.trade_commission = dict()
         self.datastatus = dict()
+        self.last_candle_timestamp = dict()
         self.round = 0
 
         # json creation
@@ -560,8 +575,14 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                                                                            devfactor=self.dev_factor,
                                                                            safediv=True,
                                                                            subplot=False,
+                                                                           plot=False
+                                                                          )
+                self.long_inds[d]['bb_std'] = bt.indicators.BollingerBands(d,
+                                                                           period=self.bb_period,
+                                                                           devfactor=self.dev_factor,
+                                                                           subplot=False,
                                                                            plot=True
-                                                                           )
+                                                                       )
                 self.long_inds[d]['bblcross'] = bt.indicators.CrossUp(self.long_inds[d]['bb'].pctb,
                                                                       (-self.low_bb/100),
                                                                       plot=False
@@ -627,6 +648,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             self.trade_open[d] = None
             self.trade_commission[d] = None
             self.datastatus[d] = None
+            self.last_candle_timestamp[d] = None
 
             if self.mode == 'optimize':
                 self.percentile_open = self.p.percentile_open
@@ -790,8 +812,14 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                                                                            devfactor=self.dev_factor,
                                                                            safediv=True,
                                                                            subplot=False,
-                                                                           plot=True
+                                                                           plot=False
                                                                            )
+                self.short_inds[d]['bb_std'] = bt.indicators.BollingerBands(d,
+                                                                           period=self.bb_period,
+                                                                           devfactor=self.dev_factor,
+                                                                           subplot=False,
+                                                                           plot=True
+                                                                            )
                 self.short_inds[d]['bblcross'] = bt.indicators.CrossDown(self.short_inds[d]['bb'].pctb,
                                                                          (-self.low_bb/100),
                                                                         plot=False)
@@ -998,6 +1026,27 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                 if self.datastatus:
                     #self.livestatus[e] = utils.ibPricing(e._name)["islive"]
                     pass
+
+                try:
+                    candle_timestamp = e.datetime.datetime(0)
+                except IndexError:
+                    candle_timestamp = None
+                if self.last_candle_timestamp[e] is None:
+                    self.last_candle_timestamp[e] = candle_timestamp
+                elif self.last_candle_timestamp[e] == candle_timestamp:
+                    print("****This candle had been running before...Skipping***")
+                    continue
+                else:
+                    self.last_candle_timestamp[e] = candle_timestamp
+                    print("****Updating last candle datetime***")
+
+                """
+                try:
+                    print("Actual Data", e.datetime.datetime(0), e.datetime.datetime(-1), e.datetime[0], e[0], e[-1])
+                except:
+                    pass
+                """
+
                 if not self.livestatus[e]:
                     print(f"Back-filling or Skipping {self.datetime.datetime()} {e._name} "
                           f"contract cycle as it may not be live")
@@ -1064,20 +1113,26 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                     try:
                         if self.mode == "live":
                             name = e._name.split("-")[0]
+                            self.trade_open[e] = self.getposition(e).price
+                            """
                             if self.trade_open[e] is None:
                                 self.trade_open[e], filepath = jsonfile.readValue("contract", name, "price")
                                 if not self.trade_open[e]:
                                     # if value not found get position average value from IB
                                     self.trade_open[e] = self.getposition(e).price
                             """
+                            """
                             if self.trade_amount[e] is None:
                                 # Check for json file to retrieve
                                 value, filepath = jsonfile.readValue("contract", name, "size")
+                            """
+                            self.trade_amount[e] = self.getposition(e).size
                             """
                             if self.trade_amount[e] is None:
                                 # if value not found get position average value from IB
                                 self.trade_amount[e] = self.getposition(e).size
 
+                            """
                             if self.trade_commission[e] is None:
                                 # Check for json file to retrieve
                                 value, filepath = jsonfile.readValue("contract", name, "commission")
@@ -1089,20 +1144,19 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                         pos_size = self.trade_amount[e]
                         pos_size_sign = 1 if pos_size >= 0 else -1
                         pos_commission = self.trade_commission[e]
-                        pos_total = (pos_price * pos_size * multiplier) + (pos_commission*pos_size_sign)
-                        pos_expected = (self.long_inds[d]['dataclose'][0] * pos_size * multiplier) - \
+                        pos_total = (pos_price * pos_size / multiplier) + (pos_commission*pos_size_sign)
+                        pos_expected = (self.short_inds[e]['dataclose'][0] * pos_size ) - \
                                        (pos_commission*pos_size_sign)
                         pos_gain = ((pos_expected-pos_total)/abs(pos_total)) * 100
-                        print(f"pos_price {pos_price} pos_size {pos_size} pos_size_sign {pos_size_sign}"
-                              f"pos_commission {pos_commission} pos_total {pos_total} = (pos_price {pos_price} *"
-                              f"pos_size {pos_size} * multiplier {multiplier} - pos_commission {pos_commission} *"
-                              f"pos_size_sign {pos_size_sign}"
-                              f"pos_gain {pos_gain} = pos_expected {pos_expected} - pos_total {pos_total} /"
-                              f"abs(pos_total {pos_total}) * 100 ")
+
+                        gain_expected = ((gain * abs(pos_total))/100) + pos_total
+
                     except IndexError:
                         pos_gain = 0
+                        gain_expected = 0
                 else:
                     pos_gain = 0
+                    gain_expected = 0
                 pos_gain_close = pos_gain > gain
                 pos_stoploss_close = pos_gain < -stoploss
                 if gain_close:
@@ -1113,6 +1167,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                     close_sell.append(pos_stoploss_close)
             else:
                 pos_gain = None
+                gain_expected = None
 
             # Percentile calculations
             percentile_in_strategy = percentile_open or percentile_close
@@ -1594,6 +1649,19 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                             "long_low": str(self.long_inds[d]["datalow"][0]),
                             "long_close": str(self.long_inds[d]["dataclose"][0]),
                             "gain": str(round(pos_gain, 2)) if pos_gain is not None else "",
+                            "gain_expected": str(round(gain_expected, 2)) if gain_expected is not None else "",
+                            "mfi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "MFI" else "",
+                            "rsi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "RSI" else "",
+                            "stoch": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "STOCH" else "",
+                            "bb_top": str(round(self.long_inds[d]["bb"].top[0], 2)) if bb_in_strategy else "",
+                            "bb_bot": str(round(self.long_inds[d]["bb"].bot[0], 2)) if bb_in_strategy else "",
+                            "bb_pct": str(round(self.long_inds[d]["bb"].pctb[0], 2)) if bb_in_strategy else "",
+                            "bb_buy": str(self.long_inds[d]['bblcross'][0]) if bb_in_strategy else "",
+                            "bb_sell": str(self.long_inds[d]['bbscross'][0]) if bb_in_strategy else "",
+                            "str": str(round(self.long_inds[d]['super'][0], 2)) if trend_in_strategy and self.trend == "STR" else "",
+                            "plusdi": str(round(self.long_inds[d]["dmi"].plusDI[0], 2)) if trend_in_strategy and self.trend == "DMI" else "",
+                            "minusdi": str(round(self.long_inds[d]["dmi"].minusDI[0], 2)) if trend_in_strategy and self.trend == "DMI" else "",
+                            "adx": str(round(self.long_inds[d]["dmi"].adx[0],2)) if trend_in_strategy and self.trend == "DMI" else "",
                             "macd1": str(self.macd1),
                             "macd2": str(self.macd2),
                             "macdsig": str(self.macdsig),
@@ -1601,12 +1669,12 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                             "atrdist": str(self.atrdist),
                             "smaperiod": str(self.smaperiod),
                             "dirperiod": str(self.dirperiod),
-                            "macd_value": str(round(self.long_inds[d]["macd"].macd[0], 2)),
-                            "sig_value": str(round(self.long_inds[d]["macd"].signal[0], 2)),
-                            "macd_cross": str(self.long_inds[d]["mcross"][0]),
+                            "macd_value": str(round(self.long_inds[d]["macd"].macd[0], 2)) if macd_in_strategy else "",
+                            "sig_value": str(round(self.long_inds[d]["macd"].signal[0], 2)) if macd_in_strategy else "",
+                            "macd_cross": str(self.long_inds[d]["mcross"][0]) if macd_in_strategy else "",
                             "sma_value": str(round(self.long_inds[d]["sma"][0], 2)) if mean_return_close else "",
                             "sma_dir": str(round(self.long_inds[d]['smadir'][0], 2)) if trend_in_strategy and trend == "SMA" else "",
-                            "atr": str(round(self.long_inds[d]['atr'][0], 2)),
+                            "atr": str(round(self.long_inds[d]['atr'][0], 2)) if atr_in_strategy else "",
                             "pstop": str(round(self.long_inds[d]['pstop'], 2)) if self.long_inds[d]['pstop'] is not None else "",
                             #"hl2": str(self.long_inds[d]["hl2"][0]),
                             #"percent_change":str(round(self.long_inds[d]['percentchange'][0],2)),

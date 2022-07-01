@@ -174,7 +174,7 @@ def _run_live(strategy) -> bt.Strategy:
     return cerebro, res[0]
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s %(name)s:%(levelname)s:%(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s %(name)s:%(levelname)s:%(message)s', level=logging.CRITICAL)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("strategy")

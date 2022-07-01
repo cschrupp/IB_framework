@@ -541,7 +541,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202209",
 			"override": {
 			}
 		},
@@ -557,9 +557,9 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202209",
 			"override": {
-					"size": 10
+					"size": 5
 			}
 		},
 		"MES": {
@@ -574,9 +574,9 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202209",
 			"override": {
-					"size": 10
+					"size": 5
 			}
 		},
 		"M2K": {
@@ -591,9 +591,9 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202209",
 			"override": {
-					"size": 10
+					"size": 5
 			}
 		},
 		"MGC": {
@@ -624,7 +624,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202207",
+			"last_trade": "202209",
 			"override": {
 					"size": 20
 			}
@@ -647,7 +647,7 @@
 		},
 		"QM": {
 			"strategy": "Macd_Strat_2",
-			"enabled": true,
+			"enabled": false,
 			"sectype": "FUT",
 			"exchange": "NYMEX",
 			"currency": "USD",
@@ -657,7 +657,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202207",
 			"override": {
 			}
 		},
@@ -673,7 +673,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202208",
 			"override": {
 			}
 		},
@@ -689,7 +689,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202208",
 			"override": {
 			}
 		},
@@ -705,7 +705,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202209",
 			"override": {
 					"osc_ob": 60,
 					"osc_os": 30,
@@ -725,8 +725,9 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202205",
+			"last_trade": "202207",
 			"override": {
+						"size": 5
 
 			}
 		},
@@ -742,7 +743,7 @@
 			"leverage": 1,
 			"commission": 5,
 			"historical": true,
-			"last_trade": "202206",
+			"last_trade": "202207",
 			"override": {
 				"size": 10
 			}
@@ -846,6 +847,7 @@
 				"live": {
 				    "base_strategy": "LiveBaseStrategy",
 				    "client_Id": 8002,
+				    "watchdog_market": "futures",
 					"dual_data": true,
 					"candle_size": "15 mins",
 					"long_candle_size": "4 hours",
@@ -950,7 +952,7 @@
 					"osc_os": 45,
 					"osc_ob_exit": 65,
 					"osc_os_exit": 40,
-					"size": 20,
+					"size": 10,
 					"percent_sizer": true
 				},
 				"optimize": {
@@ -976,6 +978,7 @@
 				"live": {
 				    "base_strategy": "LiveBaseStrategy",
 				    "client_Id": 8003,
+				    "watchdog_market": "futures",
 					"dual_data": true,
 					"candle_size": "15 mins",
 					"long_candle_size": "4 hours",
@@ -983,9 +986,9 @@
 					"sell_enabled": true,
 					"close_enabled": true,
 					"invert": false,
-					"gain_close": true,
-					"gain": 10,
-					"stoploss_close": true,
+					"gain_close": false,
+					"gain": 2,
+					"stoploss_close": false,
 					"stoploss": 60,
 					"percentile_open": false,
 					"percentile_close": false,
@@ -1013,16 +1016,16 @@
                     "trend_close": false,
 					"trend": "DMI",
 					"trend_strength": 10,
-					"smaperiod": 7,
+					"smaperiod": 10,
 					"dirperiod": 10,
                     "osc_open": true,
                     "osc_close": true,
-					"oscillator": "RSI",
-					"osc_period": 7,
+					"oscillator": "MFI",
+					"osc_period": 14,
 					"osc_ob": 60,
 					"osc_os": 45,
-					"osc_ob_exit": 65,
-					"osc_os_exit": 40,
+					"osc_ob_exit": 80,
+					"osc_os_exit": 20,
 					"size": 10,
 					"percent_sizer": true
 				}
@@ -1106,6 +1109,7 @@
 				"live": {
 				    "base_strategy": "LiveBaseStrategy",
 				    "client_Id": 8004,
+				    "watchdog_market": "stock",
 					"dual_data": true,
 					"candle_size": "15 mins",
 					"long_candle_size": "4 hours",
@@ -1236,6 +1240,7 @@
 				"live": {
 				    "base_strategy": "LiveBaseStrategy",
 				    "client_Id": 8005,
+				    "watchdog_market": "stock",
 					"dual_data": true,
 					"candle_size": "15 mins",
 					"long_candle_size": "4 hours",
@@ -1305,8 +1310,11 @@
     "watchdog": {
         "enabled": true,
         "reset_time": ["06:02","18:02"],
-        "live_test": 1000,
+        "live_test": 1,
         "cycle_mult": 2,
+        "market": "futures",
+        "early_trading": true,
+        "late_trading": true,
         "gateway_version": 1015,
         "gateway_mode": false,
         "trading_mode": "paper",

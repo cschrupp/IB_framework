@@ -42,10 +42,10 @@ def watchdog_app():
 
     ibi = IB()
 
-    ibi.connectedEvent += main
+    ibi.connectedEvent += callLiveD
 
-    watchdog = Watchdog(ibc,
-                        ibi,
+    watchdog = Watchdog(controller=ibc,
+                        ib=ibi,
                         port=gateway_port,
                         connectTimeout=connect_timeout,
                         appStartupTime=app_startup_time,
@@ -56,6 +56,15 @@ def watchdog_app():
     watchdog.start()
 
     ibi.run()
+
+def callLiveD():
+
+    strategyList = config.get_all_strategy_names()
+    lives = dict()
+    for strat in strategyList:
+        lives[strat] = subprocess.Popen(['start', "python", "LiveD.py", strat], shell=True)
+        print(strat, "Running - Pid: ", lives[strat].pid)
+        time.sleep(5)
 
 
 def callCerebro(slicedDatadic, strategy, contract):
@@ -74,7 +83,6 @@ def callCerebro(slicedDatadic, strategy, contract):
     """
     # Get and save to file strategy results for each strategy
     Results.results(strategy, cerebroResults, contract)
-
 
 
 def main():
