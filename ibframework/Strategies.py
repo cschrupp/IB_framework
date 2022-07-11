@@ -1288,12 +1288,12 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                         trend_buy = dmi_adx_threshold and dmi_positive_trend
                         trend_sell = dmi_adx_threshold and dmi_negative_trend
 
-                        #dmi_adx_threshold_close = self.long_inds[d]["dmi"].adx[0] > trend_strength + 40
+                        # dmi_adx_threshold_close = self.long_inds[d]["dmi"].adx[0] > trend_strength + 40
 
                         dmi_positive_trend = self.short_inds[e]["dmi"].plusDI[0] > self.short_inds[e]["dmi"].minusDI[0]
                         dmi_negative_trend = self.short_inds[e]["dmi"].minusDI[0] > self.short_inds[e]["dmi"].plusDI[0]
                         dmi_adx_threshold_close = self.short_inds[e]["dmi"].adx[0] > trend_strength + 40
-                        print("trend_strength", self.short_inds[e]["dmi"].adx[0], end="")
+                        # print("trend_strength", self.short_inds[e]["dmi"].adx[0], end="")
                         trend_close_buy = dmi_adx_threshold_close and dmi_negative_trend
                         trend_close_sell = dmi_adx_threshold_close and dmi_positive_trend
 
