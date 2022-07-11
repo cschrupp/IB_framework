@@ -252,12 +252,12 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         self.reset_time = config.params.watchdog.reset_time
         self.live_test = config.params.watchdog.live_test
         self.cycle_mult = config.params.watchdog.cycle_mult
-        self.market = config.get_strategy_parameter(self.strategy, "watchdog_market")
         self.early_trading = config.params.watchdog.early_trading
         self.late_trading = config.params.watchdog.late_trading
         self.tzdata = config.params.main.timezone
 
         if self.mode == "live":
+            self.market = config.get_strategy_parameter(self.strategy, "watchdog_market")
             self.add_reset_timer(reset_time=self.reset_time,
                                  live_test=self.live_test,
                                  cycle_mult=self.cycle_mult,
