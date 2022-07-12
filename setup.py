@@ -27,8 +27,8 @@ for line in requirements:
         required.append(line)
 
 setup(
-    name='B26B3',
-    version='0.0.26-beta+3',
+    name='B27',
+    version='0.0.27-beta+0',
     url='https://github.com/cschrupp/IBframework.beta',
     license='MIT',
     author='Carlos Schrupp',
