@@ -68,10 +68,10 @@ def callLiveD():
     for strat in strategyList:
         if _isWindows:
             lives[strat] = subprocess.Popen(['start', "python", "LiveD.py", strat], shell=True)
-            print(strat, "Running - Pid: ", lives[strat].pid)
-            time.sleep(5)
         else:
             lives[strat] = subprocess.Popen(["python.exe", f'{LiveDPath}/LiveD.py', strat])
+        print(strat, "Running - Pid: ", lives[strat].pid)
+        time.sleep(5)
 
 
     """
