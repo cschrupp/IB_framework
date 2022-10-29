@@ -3,6 +3,7 @@ from Config import json_config
 
 import logging
 import subprocess
+import os
 import sys
 import time
 
@@ -57,15 +58,30 @@ def watchdog_app():
 
     ibi.run()
 
+
 def callLiveD():
 
+    strategyList = config.get_all_strategy_names()
+    LiveDPath = os.getcwd()
+    _isWindows = os.sys.platform == 'win32'
+    lives = dict()
+    for strat in strategyList:
+        if _isWindows:
+            lives[strat] = subprocess.Popen(['start', "python", "LiveD.py", strat], shell=True)
+            print(strat, "Running - Pid: ", lives[strat].pid)
+            time.sleep(5)
+        else:
+            lives[strat] = subprocess.Popen(["python.exe", f'{LiveDPath}/LiveD.py', strat])
+
+
+    """
     strategyList = config.get_all_strategy_names()
     lives = dict()
     for strat in strategyList:
         lives[strat] = subprocess.Popen(['start', "python", "LiveD.py", strat], shell=True)
         print(strat, "Running - Pid: ", lives[strat].pid)
         time.sleep(5)
-
+    """
 
 def callCerebro(slicedDatadic, strategy, contract):
     # Initialize Cerebro

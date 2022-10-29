@@ -4,6 +4,7 @@ import subprocess
 import time as tm
 
 import pandas as pd
+import arch as ar
 
 import json
 import argparse
@@ -105,6 +106,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         ("dual_data", None),
         ("candle_size", None),
         ("long_candle_size", None),
+        ("session_times", None),
+        ("session_start", None),
+        ("session_end", None),
         ("cash", None),
         ("buy_enabled", None),
         ("sell_enabled", None),
@@ -112,6 +116,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         ("invert", None),
         ("gain_close", None),
         ("gain", None),
+        ("take_profit_close", None),
+        ("take_profit", None),
+        ("take_profit_threshold", None),
         ("stoploss_close", None),
         ("stoploss", None),
         ("percentile_open", None),
@@ -179,6 +186,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         else:
             self.cerebro.runstop()
 
+    def runstop(self):
+        self.cerebro.runstop()
+
     def notify_data(self, data, status, *args, **kwargs):
         mode = config.params.main.mode
         if mode == "live":
@@ -195,10 +205,13 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                 self.livestatus[data] = False
             if data._getstatusname(status) == "CONNBROKEN":
                 print("data._getstatusname(status)", data._getstatusname(status))
-                self.restart()
-            elif status == "CONNBROKEN":
-                print("status", status)
-                self.restart()
+                if self.connbroken_reset:
+                    pass
+                else:
+                    self.connbroken_reset = True
+                    #self.restart()
+                    self.runstop()
+
 
     def notify_store(self, msg, *args, **kwargs):
         mode = config.params.main.mode
@@ -231,7 +244,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         print("*******************************************************")
         print(f'strategy notify_timer with tid {timer.p.tid}')
         print("*********************RESTARTING********************")
+        jsonfile.updateFile("strategy", self.strategy, {"LASTCYCLE": datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
         #self.restart()
+        #self.runstop()
 
     def __init__(self):
         # Load config values
@@ -248,16 +263,18 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         self.logs = config.params.data.logs_output_dir
         self.pnl_observer = config.params.observers.pnl
         self.timezone = pytz.timezone(config.params.main.timezone)
-
         self.reset_time = config.params.watchdog.reset_time
         self.live_test = config.params.watchdog.live_test
         self.cycle_mult = config.params.watchdog.cycle_mult
         self.early_trading = config.params.watchdog.early_trading
         self.late_trading = config.params.watchdog.late_trading
         self.tzdata = config.params.main.timezone
+        self.connbroken_reset = False
 
+        # Add Reset timer to strategy
         if self.mode == "live":
             self.market = config.get_strategy_parameter(self.strategy, "watchdog_market")
+
             self.add_reset_timer(reset_time=self.reset_time,
                                  live_test=self.live_test,
                                  cycle_mult=self.cycle_mult,
@@ -270,7 +287,6 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
         """
         Initialize SQLite database
-
         """
         if self.mode != "optimize":
             try:
@@ -336,6 +352,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
         """
         self.new_pnl = dict()
+        self.pnl_new_rows = list()
         utils.check_path(self.logs)
         filename = list()
         filename.append(self.logs)
@@ -347,8 +364,8 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         if exist and self.mode == "live":
             self.pnl = pd.read_csv(self.filenamepnl, index_col="Date")
         else:
-            self.pnl = pd.DataFrame(columns=["Date"])
-            self.pnl.set_index("Date", inplace=True)
+            self.pnl = pd.DataFrame(columns=["Date", "Strategy", "Contract", "Size", "Price", "PctChange", "PnL"])
+            # self.pnl.set_index("Date", inplace=True)
 
         '''
         Create a dictionary of indicators so that we can dynamically add the
@@ -370,8 +387,12 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         self.buy_authorized = dict()
         self.sell_authorized = dict()
 
-        self.long_datas = self.datas[1::2]
-        self.short_datas = self.datas[::2]
+        if self.dualData:
+            self.long_datas = self.datas[1::2]
+            self.short_datas = self.datas[::2]
+
+        else:
+            self.long_datas = self.short_datas = self.datas[::1]
 
         self.long_inds = dict()
         self.short_inds = dict()
@@ -485,6 +506,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             if self.mode == "live":
                 self.json[self.p.strat][d] = dict()
                 self.json[self.p.strat][d]['pstop'] = dict()
+                self.json[self.p.strat][d]['take_profit_hit'] = dict()
 
             # Initializing indicators
             self.long_inds[d] = dict()
@@ -493,13 +515,48 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             self.long_inds[d]['dataclose'] = d.close
             self.long_inds[d]['datahigh'] = d.high
             self.long_inds[d]['datalow'] = d.low
+            self.long_inds[d]['volume'] = d.volume
 
             # Initialize pstop
             self.long_inds[d]['pstop'] = None
             self.long_inds[d]['future_pstop'] = None
+            self.long_inds[d]['take_profit_hit'] = None
 
             # Calculate Percentage Change indicator
-            self.long_inds[d]['pct'] = bt.indicators.PctChange(d, period=1)
+            self.long_inds[d]['pct'] = bt.indicators.PctChange(d, period=1, plot=False)
+
+            """
+            # Calculate EWMACD indicator
+            self.long_inds[d]["ewmacd"] = indicators.EWMACD(d, plot=True)
+            self.long_inds[d]["ewmacd_buy"] = bt.indicators.CrossOver(self.long_inds[d]["ewmacd"].ewmacd,
+                                                                      5,
+                                                                      plot=True
+                                                                      )
+            self.long_inds[d]["ewmacd_sell"] = bt.indicators.CrossOver(self.long_inds[d]["ewmacd"].ewmacd,
+                                                                       -5,
+                                                                       plot=True
+                                                                       )
+
+            # Calculate EWMAC indicator
+            self.long_inds[d]["ewmac"] = indicators.EWMAC(d, plot=True)
+
+            self.long_inds[d]["ewmac_buy"] = bt.indicators.CrossUp(self.long_inds[d]["ewmac"].ewmac,
+                                                                      10,
+                                                                      plot=True
+                                                                      )
+            self.long_inds[d]["ewmac_sell"] = bt.indicators.CrossDown(self.long_inds[d]["ewmac"].ewmac,
+                                                                       -5,
+                                                                       plot=True
+                                                                       )
+            self.long_inds[d]["ewmac_close_sell"] = bt.indicators.CrossDown(self.long_inds[d]["ewmac"].ewmac,
+                                                                            10,
+                                                                      plot=True
+                                                                      )
+            self.long_inds[d]["ewmac_close_buy"] = bt.indicators.CrossUp(self.long_inds[d]["ewmac"].ewmac,
+                                                                         -10,
+                                                                      plot=True,
+                                                                      )
+            """
 
             # Calculate MACD indicators
             macd_in_strategy = self.macd_open or self.macd_close
@@ -735,10 +792,17 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             # Initialize pstop
             self.short_inds[d]['pstop'] = None
             self.short_inds[d]['future_pstop'] = None
+            self.short_inds[d]['take_profit_hit'] = None
 
             # Calculate Percentage Change indicator
-            self.short_inds[d]['pct'] = bt.indicators.PctChange(d, period=1)
+            self.short_inds[d]['pct'] = bt.indicators.PctChange(d, period=1, plot=False)
+            """
+            # Calculate EWMACD indicator
+            self.short_inds[d]["ewmacd"] = indicators.EWMACD(d, plot=False)
 
+            # Calculate EWMAC indicator
+            self.short_inds[d]["ewmac"] = indicators.EWMAC(d, plot=False)
+            """
             # Calculate MACD indicators
             macd_in_strategy = self.macd_open or self.macd_close
             if macd_in_strategy:
@@ -761,7 +825,15 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                                                                            subplot=True,
                                                                            plot=True
                                                                            )
-
+                """
+                self.short_inds[d]['atrts'] = indicators.AverageTrueRangeTrailStop(d,
+                                                                                   atrperiod=self.atrperiod,
+                                                                                   atrdist=self.atrdist,
+                                                                                   mode=self.mode,
+                                                                                   subplot=False,
+                                                                                   plot=True
+                                                                                   )
+                """
             # Calculate trend indicators
             trend_in_strategy = self.trend_open or self.trend_close
             if trend_in_strategy:
@@ -885,9 +957,9 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
     def notify_order(self, order):
 
         dt, dn = self.datetime.date(), order.data._name
-        if self.mode != 'optimize':
+        if self.printLog and self.mode != 'optimize':
             print('{} {} Order {} Status {} Price {}'.format(
-                dt, dn, order.ref, order.getstatusname(),order.executed.price))
+                dt, dn, order.ref, order.getstatusname(), order.executed.price))
 
         if order.status in [order.Submitted, order.Accepted]:
             # Buy/Sell order submitted/accepted to/by broker - Nothing to do
@@ -1004,6 +1076,40 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
         """
         pass
 
+    """
+    # Part of ewmac
+    def sizing(self, data):
+        name = data._name.split("-")[0]
+        position = self.broker.getposition(data)
+        accvalue = self.broker.getvalue()
+        mode = config.params.main.mode
+        contractSize = config.get_contract_parameter(name, "size")
+        multiplier = config.get_contract_parameter(name, "multiplier")
+        sectype = config.get_contract_parameter(name, "sectype")
+        retint = True
+        percentSizer = config.get_contract_parameter(name, "percent_sizer")
+        if mode == "live":
+            margin = utils.ibPricing(data._name)["margin"]
+        else:
+            margin = config.get_contract_parameter(name, "margin")
+
+        if not position:
+            if percentSizer:
+                if sectype == "FUT":
+                    size = (accvalue * (contractSize / 100)) / margin
+                else:
+                    size = (accvalue * (contractSize / 100)) / (data.close[0] * multiplier)
+                logging.debug("Percent Sizer:", percentSizer, "Contract Size:", contractSize)
+            else:
+                size = contractSize
+        else:
+            size = position.size
+
+        if retint:
+            size = int(size)
+
+        return size
+    """
     def start(self):
         # initialize pending orders dictionary
         for i, e in enumerate(self.short_datas):
@@ -1014,12 +1120,39 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                 self.livestatus[e] = utils.ibPricing(e._name)["islive"]
             """
 
+        if self.mode == "live":
+            jsonfile.updateFile("strategy", self.strategy, {"START": datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+            jsonfile.updateFile("strategy", self.strategy, {"CANDLES": self.candleSize})
+            jsonfile.updateFile("strategy", self.strategy, {"LONGCANDLES": self.longCandleSize})
+            jsonfile.updateFile("strategy", self.strategy, {"PID": os.getpid()})
+
+
+
     def prenext(self):
         self.next(frompre=True)
 
+        """
+        # If mode is live then cycle between short datas
+        if self.mode == "live":
+            for i, e in enumerate(self.short_datas):
+                # Get the position value
+                position = self.getposition(e).size
+                # ATRTS Indicator previous value recovery
+                name = e._name.split("-")[0]
+                value, filepath = jsonfile.readValue("contract", name, "pstop")
+                if value:
+                    print('Previous p-stop found in contract file =', filepath, 'P-stop value Found= ',
+                          value)
+                    #self.pstopdump[e] = value
+                    position = self.getposition(e).size
+                    self.short_inds[e]['atrts'].existing_pstop(e, value, position)
+                # Gain Indicator previous value recovery
+        """
+
     def next(self, frompre=False):
 
-        self.round += 1
+        if self.datastatus:
+            self.round += 1
 
         for i, (d, e) in enumerate(zip(self.long_datas, self.short_datas)):
             if self.mode == "live":
@@ -1056,12 +1189,27 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             dt, (dn, en) = self.datetime.datetime(), (d._name, e._name)
             pos = self.getposition(e).size
             if self.mode != 'optimize':
-                print('{} {} {} Position {}'.format(dt, dn, en, pos), end="")
+                print('{} {} {} Position= {} Long close= {} Short close {} '.format(dt, dn, en, pos, d.close[0], e.close[0]),
+                      "Volume=", e.volume[0], end="")
+                """
+                # Part of ewmac 
+                try:
+                    scale = (2*(self.long_inds[d]["ewmac"].ewmac[0] + 20) / (20 + 20))-1 #- self.long_inds[d]["ewmac"].min) / (self.long_inds[d]["ewmac"].max - self.long_inds[d]["ewmac"].min)
+                    sizer = round(self.sizing(e) * scale)
+                except (ZeroDivisionError, ValueError, IndexError):
+                    scale = 1
+                    sizer = 0
+                print(" Scale=", scale, end="")
+                print(" Sizer=", sizer, end="")
+                """
 
             # Check if an order is pending ... if yes, we cannot send a 2nd one
-            if self.orders[e]:
-                print(f"Skipping {e._name} contract cycle due to pending order")
-                return  # pending order execution
+            if self.orders[e] and self.mode != "live":
+                order = self.orders[e]
+                if self.printLog and self.mode != 'optimize':
+                    print(f"Skipping {e._name} contract cycle due to pending order {order}")
+                self.cancel(order)
+                continue  # cancel pending order execution
 
             # Simply log the closing price of the series from the reference
             # self.log('Close, %.2f' % self.long_inds[d]['dataclose'][0])
@@ -1076,29 +1224,34 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             # Calculate variables
             multiplier = self.multiplier[d]
             sectype = self.sectype[d]
-            buy_enabled = self.p.buy_enabled
-            sell_enabled = self.p.sell_enabled
-            close_enabled = self.p.close_enabled
-            invert = self.p.invert
-            gain_close = self.p.gain_close
-            gain = self.p.gain
-            stoploss_close = self.p.stoploss_close
-            stoploss = self.p.stoploss
-            percentile_open = self.p.percentile_open
-            percentile_close = self.p.percentile_close
-            bb_open = self.p.bb_open
-            bb_close = self.p.bb_close
-            macd_open = self.p.macd_open
-            macd_close = self.p.macd_close
-            atr_close = self.p.atr_close
-            trail_on_buy = self.p.trail_on_buy
-            mean_return_close = self.p.mean_return_close
-            trend_open = self.p.trend_open
-            trend_close = self.p.trend_close
-            trend = self.p.trend
-            trend_strength = self.p.trend_strength
-            osc_open = self.p.osc_open
-            osc_close = self.p.osc_close
+            buy_enabled = config.get_contract_parameter(self.contracts[d], "buy_enabled")
+            sell_enabled = config.get_contract_parameter(self.contracts[d], "sell_enabled")
+            close_enabled = config.get_contract_parameter(self.contracts[d], "close_enabled")
+            invert = config.get_contract_parameter(self.contracts[d], "invert")
+            gain_close = config.get_contract_parameter(self.contracts[d], "gain_close")
+            gain = config.get_contract_parameter(self.contracts[d], "gain")
+            take_profit_close = config.get_contract_parameter(self.contracts[d], "take_profit_close")
+            take_profit = config.get_contract_parameter(self.contracts[d], "take_profit")
+            take_profit_threshold = config.get_contract_parameter(self.contracts[d], "take_profit_threshold")
+            stoploss_close = config.get_contract_parameter(self.contracts[d], "stoploss_close")
+            stoploss = config.get_contract_parameter(self.contracts[d], "stoploss")
+            percentile_open = config.get_contract_parameter(self.contracts[d], "percentile_open")
+            percentile_close = config.get_contract_parameter(self.contracts[d], "percentile_close")
+            bb_open = config.get_contract_parameter(self.contracts[d], "bb_open")
+            bb_close = config.get_contract_parameter(self.contracts[d], "bb_close")
+            macd_open = config.get_contract_parameter(self.contracts[d], "macd_open")
+            macd_close = config.get_contract_parameter(self.contracts[d], "macd_close")
+            atr_close = config.get_contract_parameter(self.contracts[d], "atr_close")
+            trail_on_buy = config.get_contract_parameter(self.contracts[d], "trail_on_buy")
+            mean_return_close = config.get_contract_parameter(self.contracts[d], "mean_return_close")
+            trend_open = config.get_contract_parameter(self.contracts[d], "trend_open")
+            trend_close = config.get_contract_parameter(self.contracts[d], "trend_close")
+            trend = config.get_contract_parameter(self.contracts[d], "trend")
+            trend_strength = config.get_contract_parameter(self.contracts[d], "trend_strength")
+            oscillator = config.get_contract_parameter(self.contracts[d], "oscillator")
+            osc_open = config.get_contract_parameter(self.contracts[d], "osc_open")
+            osc_close = config.get_contract_parameter(self.contracts[d], "osc_close")
+
 
             # Create strategy lists
             open_buy = list()
@@ -1106,8 +1259,18 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             close_buy = list()
             close_sell = list()
 
+            # Invert
+            if invert:
+                buy_method = self.sell
+                sell_method = self.buy
+            else:
+                buy_method = self.buy
+                sell_method = self.sell
+
+
             # Gain calculations
-            gain_in_strategy = gain_close or stoploss_close
+            gain_in_strategy = any([gain_close, stoploss_close, take_profit_close])
+
             if gain_in_strategy:
                 if pos:
                     try:
@@ -1134,37 +1297,125 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                             """
                             if self.trade_commission[e] is None:
-                                # Check for json file to retrieve
-                                value, filepath = jsonfile.readValue("contract", name, "commission")
-                                if self.trade_commission[e] is None:
-                                    # if value not found set figurative value of 1
-                                    self.trade_commission[e] = 1
+                                # Check for json file to retrieve if live
+                                if self.mode == "live":
+                                    value, filepath = jsonfile.readValue("contract", name, "commission")
+                                    if self.trade_commission[e] is None:
+                                        # if value not found set figurative value of 1
+                                        self.trade_commission[e] = 1
+                            else:
+                                self.trade_commission[e] = 1
 
-                        pos_price = self.trade_open[e]
-                        pos_size = self.trade_amount[e]
+                            take_profit_hit, filepath = jsonfile.readValue("contract", name, 'take_profit_hit')
+                            if take_profit_hit:
+                                self.long_inds[d]['take_profit_hit'] = True
+
+
+                        pos_price = self.trade_open[e] if self.trade_open[e] is not None else 0
+                        pos_size = self.trade_amount[e] if self.trade_amount[e] is not None else 0
                         pos_size_sign = 1 if pos_size >= 0 else -1
-                        pos_commission = self.trade_commission[e]
-                        pos_total = (pos_price * pos_size / multiplier) + (pos_commission*pos_size_sign)
-                        pos_expected = (self.short_inds[e]['dataclose'][0] * pos_size ) - \
+                        pos_commission = self.trade_commission[e] if self.trade_commission[e] is not None else 1
+
+                        """
+                        if self.mode == "live":
+                            pos_total = (pos_price * pos_size / multiplier) + (pos_commission*pos_size_sign)
+                        else:
+                            pos_total = (pos_price * pos_size / 1) + (pos_commission * pos_size_sign)
+                    
+                        pos_expected = (self.short_inds[e]['dataclose'][0] * pos_size) - \
                                        (pos_commission*pos_size_sign)
+                        """
+                        if self.mode == "live":
+                            # During a live session IB reports pos_total as pos_price * multiplier * pos_size ?
+                            pos_total = (pos_price * pos_size) + (pos_commission * pos_size_sign)
+                            gain_expected = abs((((gain * abs(pos_total)) / 100) + pos_total) / (multiplier * abs(pos_size)))
+                            stoploss_expected = abs((((-stoploss * abs(pos_total)) / 100) + pos_total) / (multiplier * abs(pos_size)))
+                            take_profit_expected = abs((((take_profit * abs(pos_total)) / 100) + pos_total) / (multiplier * abs(pos_size)))
+                            take_profit_th_expected = abs(((((take_profit+take_profit_threshold) *
+                                                             abs(pos_total)) / 100) + pos_total) / (multiplier * abs(pos_size)))
+                        else:
+                            pos_total = (pos_price * pos_size * multiplier) + (pos_commission * pos_size_sign)
+                            gain_expected = abs(((gain * abs(pos_total)) / 100) + pos_total)
+                            stoploss_expected = abs((((-stoploss * abs(pos_total)) / 100) + pos_total))
+                            take_profit_expected = abs(((take_profit * abs(pos_total)) / 100) + pos_total)
+                            take_profit_th_expected = abs(((((take_profit+take_profit_threshold) *
+                                                             abs(pos_total)) / 100) + pos_total))
+
+                        pos_expected = (self.short_inds[e]['dataclose'][0] * pos_size * multiplier) - \
+                                       (pos_commission * pos_size_sign)
+
                         pos_gain = ((pos_expected-pos_total)/abs(pos_total)) * 100
 
-                        gain_expected = ((gain * abs(pos_total))/100) + pos_total
+
 
                     except IndexError:
                         pos_gain = 0
                         gain_expected = 0
+                        stoploss_expected = 0
+                        take_profit_expected = 0
+                        take_profit_th_expected = 0
+
+
+                    pos_gain_close = pos_gain > gain
+                    pos_stoploss_close = pos_gain < -stoploss
+
+                    self.long_inds[d]['take_profit_hit'] = pos_gain > (take_profit + take_profit_threshold) \
+                        if not self.long_inds[d]['take_profit_hit'] else self.long_inds[d]['take_profit_hit']
+
+                    pos_take_profit = all([(pos_gain < take_profit), self.long_inds[d]['take_profit_hit']])
+                    """
+                    print(f" Multiplier={multiplier} Position price={pos_price} Position size={pos_size} "
+                          f"Position commision={pos_commission} Position sign={pos_size_sign} "
+                          f"Gain={pos_gain}, Take profit hit={self.long_inds[d]['take_profit_hit']} "
+                          f"Pos gain < take profit={(pos_gain < take_profit)}  "
+                          f"Take profit={take_profit} Threshold={take_profit_threshold} "
+                          f"Take profit close={pos_take_profit} Gain close={pos_gain_close} "
+                          f"Stoploss close={pos_stoploss_close}", end="")
+                    """
                 else:
+                    pos_price = 0
+                    pos_size = 0
                     pos_gain = 0
                     gain_expected = 0
+                    take_profit_expected = 0
+                    take_profit_th_expected = 0
+                    stoploss_expected = 0
+                    pos_commission = 0
+                    pos_size_sign = 0
+                    self.long_inds[d]['take_profit_hit'] = None
+                    pos_gain_close = False
+                    pos_stoploss_close = False
+                    pos_take_profit = False
+
+                """
                 pos_gain_close = pos_gain > gain
                 pos_stoploss_close = pos_gain < -stoploss
+                self.long_inds[d]['take_profit_hit'] = pos_gain >= take_profit + take_profit_threshold
+                
+                pos_take_profit = pos_gain <= take_profit and self.long_inds[d]['take_profit_hit']
+                
+                
+                """
+                print(f" Multiplier={multiplier} Position price={pos_price} Position size={pos_size} "
+                      f"Position commision={pos_commission} Position sign={pos_size_sign} "
+                      f"Gain={pos_gain}, Take profit hit={self.long_inds[d]['take_profit_hit']} "
+                      f"Pos gain < take profit={(pos_gain < take_profit)}  "
+                      f"Take profit={take_profit} Threshold={take_profit_threshold} "
+                      f"Take profit close={pos_take_profit} Gain close={pos_gain_close} "
+                      f"Stoploss close={pos_stoploss_close}", end="")
+                
+
                 if gain_close:
                     close_buy.append(pos_gain_close)
                     close_sell.append(pos_gain_close)
                 if stoploss_close:
                     close_buy.append(pos_stoploss_close)
                     close_sell.append(pos_stoploss_close)
+                if take_profit_close:
+                    close_buy.append(pos_take_profit)
+                    close_sell.append(pos_take_profit)
+                    self.long_inds[d]['take_profit_hit'] = False if pos_take_profit \
+                        else self.long_inds[d]['take_profit_hit']
             else:
                 pos_gain = None
                 gain_expected = None
@@ -1203,35 +1454,101 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                     close_buy.append(bb_exit)
                     close_sell.append(bb_exit)
 
+            # EWMAC calculations
+            """
+            ewmac_in_strategy = True
+
+            #pd.DataFrame(self.long_inds[d]["ewmac"].ewmac.get(ago=-1, size=10))
+
+            close_len = len(self.long_inds[d]['dataclose'])
+            close_df = pd.DataFrame(self.long_inds[d]['dataclose'].get(ago=0, size=close_len))
+            if close_len > 100000000000000000:
+                #close_returns = 100 * close_df.pct_change().dropna()
+                pricestd = close_df - close_df.shift(1)
+                pricestd = pricestd.dropna()
+                #print(pricestd)
+                am = ar.arch_model(pricestd, vol="GARCH", p=1, o=0, q=1, dist="t")
+                res = am.fit(update_freq=5, disp="off")
+                forecasts = res.forecast(reindex=False).variance
+                #print(f"Mean= {forecasts.mean} Residual= {forecasts.residual_variance.iloc[-3:]} Variance = {forecasts.variance.iloc[-3:]}")
+                print(f" SQRT(Variance) = {forecasts.iloc[0][0]**(1/2)} std_dev= ", self.long_inds[d]["ewmac"].std_dev[0], self.long_inds[d]['dataclose'][-1], self.long_inds[d]['dataclose'][0], end="")
+
+                #print(len(d.close), close_df, close_returns, end="")
+
+            av_raw_ewmac = self.long_inds[d]["ewmac"].ac_raw_ewmac[0]/len(d)
+            av_raw_ewmacd = self.long_inds[d]["ewmacd"].ac_raw_ewmacd[0] / len(d)
+
+            print(" EWMAC=", self.long_inds[d]["ewmac"].ewmac[0],"Av_raw_ewmac=", av_raw_ewmac, end="")
+            print(" EWMACD=", self.long_inds[d]["ewmacd"].ewmacd[0], "Av_raw_ewmacd=", av_raw_ewmacd, end="")
+            if ewmac_in_strategy:
+                try:
+
+                    ewmac_buy = self.long_inds[d]["ewmac_buy"] >= 1.0
+                    ewmac_sell = self.long_inds[d]["ewmac_sell"] >= 1.0
+                    ewmac_close_buy = self.long_inds[d]["ewmac_close_buy"] >= 1.0
+                    ewmac_close_sell = self.long_inds[d]["ewmac_close_sell"] >= 1.0 #or self.long_inds[d]["ewmac_close"] >= 1.0
+
+                    """
+            """
+                    ewmac_buy = self.long_inds[d]["ewmac"].ewmac > 10.0
+                    ewmac_sell = self.long_inds[d]["ewmac"].ewmac < -10.0
+                    ewmac_close_buy = self.long_inds[d]["ewmac"].ewmac > -5.0
+                    ewmac_close_sell = self.long_inds[d]["ewmac"].ewmac < 5.0
+                    
+                    ewmac_buy = self.long_inds[d]["ewmacd"].ewmacd > 0.0
+                    ewmac_sell = self.long_inds[d]["ewmacd"].ewmacd < -0.0
+                    ewmac_close_buy = self.long_inds[d]["ewmacd"].ewmacd > -0.0
+                    ewmac_close_sell = self.long_inds[d]["ewmacd"].ewmacd < 0.0
+                    """
+            """
+
+                except IndexError:
+                    ewmac_buy = False
+                    ewmac_sell = False
+                    ewmac_close_buy = False
+                    ewmac_close_sell = False
+
+                ewmac_open = False
+                if ewmac_open:
+                    open_buy.append(ewmac_buy)
+                    open_sell.append(ewmac_sell)
+                ewmac_close = False
+                if ewmac_close:
+                    close_buy.append(ewmac_close_buy)
+                    close_sell.append(ewmac_close_sell)
+            """
             # MACD calculations
             macd_in_strategy = macd_open or macd_close
             if macd_in_strategy:
                 try:
                     tolerance = 0.0025
                     signalDeltaPercent = self.long_inds[d]['macd'].macd - self.long_inds[d]['macd'].signal
-                    #mcross_buy = signalDeltaPercent > tolerance
-                    #mcross_sell = signalDeltaPercent < -tolerance
+                    mcross_buy_close = signalDeltaPercent > tolerance
+                    mcross_sell_close = signalDeltaPercent < -tolerance
                     #print(' MACD Delta {}'.format(signalDeltaPercent), end="")
-
 
                     mcross_buy = self.long_inds[d]['mcross'][0] > 0.0
                     mcross_sell = self.long_inds[d]['mcross'][0] < 0.0
+
                 except IndexError:
                     mcross_buy = False
                     mcross_sell = False
+                    mcross_buy_close = False
+                    mcross_sell_close = False
+
                 if macd_open:
                     open_buy.append(mcross_buy)
                     open_sell.append(mcross_sell)
                 if macd_close:
-                    close_buy.append(mcross_buy)
-                    close_sell.append(mcross_sell)
+                    close_buy.append(mcross_buy_close)
+                    close_sell.append(mcross_sell_close)
 
             # ATR calculations
             atr_in_strategy = atr_close or trail_on_buy
             if atr_in_strategy:
                 try:
-                    pdist = self.long_inds[d]['atr'][0] * self.atrdist
-                    pdist_trail = self.long_inds[d]['atr'][0] * self.atrdist_trail
+                    pdist = self.short_inds[e]['atr'][0] * self.atrdist
+                    pdist_trail = self.short_inds[e]['atr'][0] * self.atrdist_trail
                 except (IndexError, KeyError) :
                     pdist = 10000
                     pdist_trail = 10000
@@ -1356,7 +1673,19 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
             else:
                 orderkwargs = dict(data=e)
             """
+            """
+            if self.mode != "live" or (self.mode == "live" and self.datastatus[e]):  # Open positions
+                #print(pos,sizer,pos-sizer,sizer-pos)
+                if pos > sizer:
+                    size = pos - sizer
+                    self.orders[e] = self.sell(data=e, size=size)
+                elif pos < sizer:
+                    size = sizer - pos
+                    self.orders[e] = self.buy(data=e, size=size)
 
+                else:
+                    pass
+            """    
             # Check if we are in the market
             # if not self.position: # Open positions
             if (self.mode != "live" and not pos) or (self.mode == "live" and self.datastatus[e] and not pos):  # Open positions
@@ -1380,11 +1709,14 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                             orderkwargs = dict(data=e)
 
-                        self.orders[e] = self.buy(**orderkwargs)
+                        self.orders[e] = buy_method(**orderkwargs)
                         self.current_action[d] = "Buying!!!"
                     if atr_in_strategy:
-                        self.long_inds[d]['pstop'] = self.long_inds[d]['dataclose'][0] - pdist
-                        print("***********PSTOP CREATED 2 ******************", self.long_inds[d]['pstop'])
+                        self.long_inds[d]['pstop'] = self.short_inds[e]['dataclose'][0] - pdist if buy_method == self.buy else self.short_inds[e]['dataclose'][0] + pdist
+                        if self.printLog and self.mode != 'optimize':
+                            print("***********PSTOP CREATED 2 ******************", self.long_inds[d]['pstop'])
+                    if gain_in_strategy:
+                        self.long_inds[d]["take_profit_hit"] = False
 
                 elif sell_enabled and all(open_sell):
                     if self.p.trail_on_buy:
@@ -1402,11 +1734,14 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                             orderkwargs = dict(data=e)
 
-                        self.orders[e] = self.sell(**orderkwargs)
+                        self.orders[e] = sell_method(**orderkwargs)
                         self.current_action[d] = "Selling!!!"
                     if atr_in_strategy:
-                        self.long_inds[d]['pstop'] = self.long_inds[d]['dataclose'][0] + pdist
-                        print("***********PSTOP CREATED 2 ******************", self.long_inds[d]['pstop'])
+                        self.long_inds[d]['pstop'] = self.short_inds[e]['dataclose'][0] + pdist if sell_method == self.sell else self.short_inds[e]['dataclose'][0] - pdist
+                        if self.printLog and self.mode != 'optimize':
+                            print("***********PSTOP CREATED 2 ******************", self.long_inds[d]['pstop'])
+                    if gain_in_strategy:
+                        self.long_inds[d]["take_profit_hit"] = False
 
                 elif self.buy_authorized[d]:
 
@@ -1428,7 +1763,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                             orderkwargs = dict(data=e)
 
-                        self.orders[e] = self.buy(**orderkwargs)  # stop met - get out
+                        self.orders[e] = buy_method(**orderkwargs)  # stop met - get out
 
                         self.buy_authorized[d] = False
                         self.current_action[d] = "Buying!!!"
@@ -1437,7 +1772,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                         self.current_action[d] = "Trailing to buy"
 
                         # Update only if greater than
-                        self.long_inds[d]['pstop'] = min(pstop, pclose + pdist_trail)
+                        self.long_inds[d]['pstop'] = min(pstop, pclose + pdist_trail) if buy_method == self.buy else max(pstop, pclose - pdist_trail)
                         if self.printLog and self.mode != 'optimize':
                             print("ATR Trail Stop Loss Short =", self.long_inds[d]['pstop'])
                         return
@@ -1462,7 +1797,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                             orderkwargs = dict(data=e)
 
-                        self.orders[e] = self.sell(**orderkwargs)  # stop met - get out
+                        self.orders[e] = sell_method(**orderkwargs)  # stop met - get out
 
                         self.sell_authorized[d] = False
                         self.current_action[d] = "Selling!!!"
@@ -1471,7 +1806,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                         self.current_action[d] = "Trailing to sell"
 
                         # Update only if greater than
-                        self.long_inds[d]['pstop'] = max(pstop, pclose - pdist_trail)
+                        self.long_inds[d]['pstop'] = max(pstop, pclose - pdist_trail) if buy_method == self.sell else min(pstop, pclose + pdist_trail)
                         if self.printLog and self.mode != 'optimize':
                             print("ATR Trail Stop Loss Long =", self.long_inds[d]['pstop'])
                         return
@@ -1501,7 +1836,8 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
                         pclose = self.short_inds[e]['dataclose'][0]
                         pstop = self.long_inds[d]['pstop']
-                        print("pclose", pclose, " pstop", pstop)
+                        if self.printLog and self.mode != 'optimize':
+                            print("pclose", pclose, " pstop", pstop)
                         trigger = pclose < pstop
                         close_sell.append(trigger)
 
@@ -1579,12 +1915,16 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                             if self.printLog and self.mode != 'optimize':
                                 print("ATR Trail Stop Loss Short =", self.long_inds[d]['pstop'])
                             #return
-
-                if self.mode == "live":
+# ***********************************END OF STRATEGY************************************************
+                if self.mode == "live" and self.datastatus[e]:
                     name = d._name.split("-")[0]
+                    # Update pstop value on contract json
                     pstop = self.long_inds[d]['pstop']
                     value = {"pstop": pstop}
-
+                    jsonfile.updateFile("contract", name, value)
+                    #Update take_profit_hit value on contract json
+                    take_profit_hit = self.long_inds[d]['take_profit_hit']
+                    value = {'take_profit_hit': take_profit_hit}
                     jsonfile.updateFile("contract", name, value)
 
             if self.mode != 'optimize':
@@ -1603,24 +1943,31 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                         cur_ret = 0
                     print(" Pnl=", round(cur_pnl, 2), "Ret=", round(cur_ret, 4))
 
-                    # Store pnl in SQLite table
                     dt_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    """
+                    # Store pnl in SQLite table
                     new_row_sql = (dt_str, self.strategy, e._name, pos, e.close[0], cur_ret, cur_pnl,)
                     self.cur.execute("INSERT INTO pnl VALUES (?, ?, ?, ?, ?, ?, ?)", new_row_sql)
                     self.con.commit()
+                    """
+                    # Store pnl in Pandas dataframe
+                    self.pnl_new_rows.append(pd.DataFrame({"Date": dt_str, "Strategy": self.strategy, "Contract": e._name,
+                                                "Size": pos, "Price": e.close[0], "PctChange": cur_ret, "PnL": cur_pnl},
+                                               index=[0]))
+                    # print("PNL", self.pnl_new_rows)
+                    # self.pnl = pd.concat([pnl_new_row, self.pnl]).reset_index(drop=True)
+                    #print(self.pnl)
 
-                    # If mode is live save database to csv every cycle
-                    if self.mode == 'live':
-                        query = f"SELECT * FROM pnl WHERE Strategy = '{self.strategy}'"
-                        self.pnl = pd.read_sql_query(query, self.con)
-                        try:
-                            self.pnl.to_csv(self.filenamepnl)
-                        except PermissionError:
-                            print("Permission error while saving. Please check for opened files")
 
                     if self.printLog:
                         print("Available cash=", self.cash, " Total portfolio value=", self.value, 'PStop',
-                          self.long_inds[d]['pstop'])
+                              self.long_inds[d]['pstop'])
+
+
+# ****************************************************START*****************************************************
+# ******************************COLLECT TABLE DISPLAY PARAMETERS FROM STRATEGY**********************************
+
+
                     if self.table:
                         table_content = {
                             "ver": config.params.version,
@@ -1650,18 +1997,22 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                             "long_close": str(self.long_inds[d]["dataclose"][0]),
                             "gain": str(round(pos_gain, 2)) if pos_gain is not None else "",
                             "gain_expected": str(round(gain_expected, 2)) if gain_expected is not None else "",
-                            "mfi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "MFI" else "",
-                            "rsi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "RSI" else "",
-                            "stoch": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and self.oscillator == "STOCH" else "",
+                            "takeprofit_hit": str(self.long_inds[d]['take_profit_hit']) if self.long_inds[d]['take_profit_hit'] is not None else "",
+                            "takeprofit_expected": str(round(take_profit_expected, 2)) if take_profit_expected is not None else "",
+                            "takeprofit_th_expected": str(round(take_profit_th_expected, 2)) if take_profit_th_expected is not None else "",
+                            "stoploss_expected": str(round(stoploss_expected, 2)) if stoploss_expected is not None else "",
+                            "mfi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and oscillator == "MFI" else "",
+                            "rsi": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and oscillator == "RSI" else "",
+                            "stoch": str(round(self.short_inds[e]["osc"][0], 2)) if osc_in_strategy and oscillator == "STOCH" else "",
                             "bb_top": str(round(self.long_inds[d]["bb"].top[0], 2)) if bb_in_strategy else "",
                             "bb_bot": str(round(self.long_inds[d]["bb"].bot[0], 2)) if bb_in_strategy else "",
                             "bb_pct": str(round(self.long_inds[d]["bb"].pctb[0], 2)) if bb_in_strategy else "",
                             "bb_buy": str(self.long_inds[d]['bblcross'][0]) if bb_in_strategy else "",
                             "bb_sell": str(self.long_inds[d]['bbscross'][0]) if bb_in_strategy else "",
-                            "str": str(round(self.long_inds[d]['super'][0], 2)) if trend_in_strategy and self.trend == "STR" else "",
-                            "plusdi": str(round(self.long_inds[d]["dmi"].plusDI[0], 2)) if trend_in_strategy and self.trend == "DMI" else "",
-                            "minusdi": str(round(self.long_inds[d]["dmi"].minusDI[0], 2)) if trend_in_strategy and self.trend == "DMI" else "",
-                            "adx": str(round(self.long_inds[d]["dmi"].adx[0],2)) if trend_in_strategy and self.trend == "DMI" else "",
+                            "str": str(round(self.long_inds[d]['super'][0], 2)) if trend_in_strategy and trend == "STR" else "",
+                            "plusdi": str(round(self.long_inds[d]["dmi"].plusDI[0], 2)) if trend_in_strategy and trend == "DMI" else "",
+                            "minusdi": str(round(self.long_inds[d]["dmi"].minusDI[0], 2)) if trend_in_strategy and trend == "DMI" else "",
+                            "adx": str(round(self.long_inds[d]["dmi"].adx[0],2)) if trend_in_strategy and trend == "DMI" else "",
                             "macd1": str(self.macd1),
                             "macd2": str(self.macd2),
                             "macdsig": str(self.macdsig),
@@ -1691,16 +2042,40 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                             "last_pnl": str(self.last_pnl[e])
                         }
                         table_display(**table_content)
+
+
+# ****************************************************END*******************************************************
+# ******************************COLLECT TABLE DISPLAY PARAMETERS FROM STRATEGY**********************************
+
             if self.mode == "live":
                 print("Available cash=", self.cash, " Total portfolio value=", self.value, 'PStop',
                       self.long_inds[d]['pstop'])
 
+        # If mode is live save database to csv every cycle
+        if self.mode == "live" and self.datastatus:
+            """
+            query = f"SELECT * FROM pnl WHERE Strategy = '{self.strategy}'"
+            self.pnl = pd.read_sql_query(query, self.con)
+            """
+            # If mode is live save Pandas dataframe to csv every cycle
+            if self.pnl_new_rows:
+                new_row = pd.concat(self.pnl_new_rows)
+                # print("PNL new row", new_row)
+                self.pnl = pd.concat([new_row, self.pnl]).reset_index(drop=True)
+                self.pnl_new_rows = list()
+                # print("Self.pnl", self.pnl)
+                try:
+                    self.pnl.to_csv(self.filenamepnl)
+                except PermissionError:
+                    print("Permission error while saving. Please check for opened files")
+
         if self.mode == "live":
-            if self.datastatus[e]:
-                self.datastatus[e] += 1
+            if self.datastatus[e]:  # Outside datas loops FIX!!!!!!!!!!!!
+                self.datastatus[e] += 1  # what is this????????????
             jsonfile.updateFile("strategy", self.strategy, {"LASTCYCLE": datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
             jsonfile.updateFile("strategy", self.strategy, {"CANDLES": self.candleSize})
             jsonfile.updateFile("strategy", self.strategy, {"LONGCANDLES": self.longCandleSize})
+            jsonfile.updateFile("strategy", self.strategy, {"PID": os.getpid()})
 
     def stop(self):
 
@@ -1721,10 +2096,13 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
 
             # Retrieve pnl database from SQLite
             query = f"SELECT * FROM pnl WHERE Strategy = '{self.strategy}'"
-            self.pnl = pd.read_sql_query(query, self.con)
-
+            #self.pnl = pd.read_sql_query(query, self.con)
+            #self.pnl.set_index("Date", inplace=True)
+            #print("PNL", self.pnl)
             # Save pnl database to csv
             if self.mode == 'backtest':
+                self.pnl_new_rows = pd.concat(self.pnl_new_rows)
+                self.pnl = pd.concat([self.pnl_new_rows, self.pnl]).reset_index(drop=True)
                 try:
                     self.pnl.to_csv(self.filenamepnl)
                 except PermissionError:
@@ -1742,7 +2120,7 @@ class Macd_AtrTrail_M_Dual(bt.Strategy):
                 df = self.pnl[(self.pnl['Contract'] == cont)].copy()
                 df['Date'] = pd.to_datetime(df['Date'])
                 df.set_index("Date", inplace=True)
-                df = df[["PctChange"]]
+                df = df[["PctChange"]].astype(float)  # Select PctChange and make sure it is copied as a float
                 df.rename(columns={'PctChange': cont}, inplace=True)
                 df = df.loc[~df.index.duplicated(keep="first")]
                 db_index = pd.concat([db_index, df], axis=1, verify_integrity=True)

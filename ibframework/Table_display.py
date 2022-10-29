@@ -10,7 +10,8 @@ def table_display(ver, round, mode, contract, strategy, timestamp,
                   long_high, long_low, long_close, macd1, macd2, macdsig, atrperiod, atrdist, smaperiod, dirperiod,
                   #atrdist_trail,high_percentile,low_percentile,
                   macd_value, sig_value, macd_cross, sma_value, sma_dir, atr, pstop,
-                  gain, gain_expected, rsi, mfi, stoch, bb_top, bb_bot, bb_pct, bb_buy, bb_sell, str, plusdi, minusdi, adx,
+                  gain, gain_expected, takeprofit_hit, takeprofit_expected, takeprofit_th_expected, stoploss_expected,
+                  rsi, mfi, stoch, bb_top, bb_bot, bb_pct, bb_buy, bb_sell, str, plusdi, minusdi, adx,
                   #hl2, percent_change, percentile_short, percentile_long,
                   total_value, total_cash, open_pos,
                   buy_price, historic_pnl, open_price, close_price, amount, last_pnl
@@ -33,13 +34,13 @@ def table_display(ver, round, mode, contract, strategy, timestamp,
     table.add_row("", short_length, short_timestamp, short_open, short_high, short_low, short_close, position)
     table.add_row("Contract long", "Candles length", "Candle timestamp", "Open", "High", "Low", "Close", "Position", style="bold")
     table.add_row("", long_length, long_timestamp, long_open, long_high, long_low, long_close, position)
-    table.add_row("Parameters", "MACD 1", "MACD 2", "MACD sig", "ATR period", "ATR dist", "SMA period", "SMA dir period", style="bold")
+    table.add_row("Parameters", "MACD 1", "MACD 2", "MACD signal", "ATR period", "ATR dist", "SMA period", "SMA dir period", style="bold")
     table.add_row("", macd1, macd2, macdsig, atrperiod, atrdist, smaperiod, dirperiod)
     # table.add_row("","ATR dist trail", "High percentile", "Low percentile",style="bold")
     # table.add_row("",atrdist_trail,high_percentile,low_percentile)
-    table.add_row("Gain", "Gain", "Calculated Exit", "Calculated Stop Loss", style="bold")
-    table.add_row("", gain, gain_expected, "")
-    table.add_row("MACD", "Macd MA", "Macd Sig", "Macd Cross Signal", style="bold")
+    table.add_row("Gain", "Gain", "Calculated Gain Exit", "Calculated Take profit", "Calculated Take profit threshold", "Take profit threshold hit",   "Calculated Stop Loss", style="bold")
+    table.add_row("", gain, gain_expected, takeprofit_expected, takeprofit_th_expected, takeprofit_hit, stoploss_expected)
+    table.add_row("MACD", "Macd MA", "Macd Signal", "Macd Cross Signal", style="bold")
     table.add_row("", macd_value, sig_value, macd_cross)
     table.add_row("ATR", "Atr", "P-Stop", style="bold")
     table.add_row("", atr, pstop)

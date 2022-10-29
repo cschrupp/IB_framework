@@ -114,6 +114,7 @@ def _run_live(strategy) -> bt.Strategy:
 
     _logger.info("Constructing Cerebro")
     # Load config parameters
+    _isWindows = os.sys.platform == 'win32'
     stratFunc = eval(config.get_strategy_parameter(strategy, "base_strategy"))
     stratParameters = config.config_data["strategies"][strategy]["live"]
     contractNames = config.get_contract_names_by_strat(strategy)
@@ -132,6 +133,8 @@ def _run_live(strategy) -> bt.Strategy:
     print("clientId", clientId)
     timeout = config.params.connection.ib_insync_timeout
     timezone = pytz.timezone(config.params.main.timezone)
+    fromdate = datetime.now() - timedelta(days=utils.maxPeriodDays(strategy, longCandleSize))  # timedelta(days=30)
+
 
     # Initialize Cerebro
     cerebro = bt.Cerebro()
@@ -161,14 +164,12 @@ def _run_live(strategy) -> bt.Strategy:
 
         print("dataname", d)
 
-        data0 = store.getdata(dataname=d, rtbar=True, qcheck=0.1, timeframe=bt.TimeFrame.Ticks, compression=30)
+        data0 = store.getdata(dataname=d, rtbar=True, qcheck=0.1, timeframe=bt.TimeFrame.Ticks, compression=30,
+                              fromdate=fromdate)
         cerebro.resampledata(data0, timeframe=timeFrame, compression=compression, name=name)
 
         if dualData:
             cerebro.resampledata(data0, timeframe=longTimeFrame, compression=longCompression, name=long_name)
-
-    #cerebro.add_rttimer(when="20:04", repeat=1, cerebro=cerebro, tz=timezone)
-    #cerebro.add_timer(when=time(19, 31), repeat=timedelta(minutes=1), cheat=False, tzdata=timezone, realtime=True)
 
     res = cerebro.run(tz=timezone)
     return cerebro, res[0]

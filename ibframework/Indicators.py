@@ -3,10 +3,11 @@ import logging
 import backtrader as bt
 import scipy.stats
 from backtrader.observers import MetaDataTrades
+import numpy as np
 
 from Config import json_config
 import utils
-
+from Json import JsonFiles
 
 # config logging
 logging.basicConfig(level=logging.CRITICAL)
@@ -14,6 +15,8 @@ log = logging.getLogger('broadcast')
 
 # parse config
 config = json_config()
+# parse Json
+jsonfile = JsonFiles()
 
 
 class finalSizer(bt.Sizer):
@@ -56,6 +59,207 @@ class finalSizer(bt.Sizer):
             size = int(size)
 
         return size
+
+
+class sofmaxSizer(bt.Sizer):
+    #Based on the value percent sizer, this sizer can handle both fixed stake and percent
+    params = (
+        ('percents', 20),
+        ('percentSizer', False),
+        ('retint', True),# return an int size or rather the float value
+    )
+
+    def __init__(self):
+        self.bt = {"XLP": 19.36, "SPY": 17.07, "XLV": 21.5, "XLU": 23.81, "FXI": 10.35, "QQQ": 22.62, "GLD": 17.98,
+                       "XBI": 24.03, "USO": 22.13, "SLV": 17.48, "ITB": 23.83, "UNG": 13.37, "TSLA": 18.45,
+                       "SMH": 21.03, "TLT": 20.27}
+
+        values = list()
+        for contract in self.bt:
+            values.append(self.bt[contract])
+        scalar_array = np.asarray(values) / np.sum(np.asarray(values))
+
+        self.scalar = dict()
+        for i, contract in enumerate(self.bt):
+            self.scalar[contract] = round(scalar_array[i] * 100, 2)
+
+        print(self.scalar)
+
+
+
+        # pass
+
+    def _getsizing(self, comminfo, cash, data, isbuy):
+        cash_ratio = 1-(self.broker.getcash() / self.broker.getvalue())
+        max_volume = data.volume[0] * 0.01
+        name = data._name.split("-")[0]
+        position = self.broker.getposition(data)
+        accvalue = self.broker.getvalue() if cash_ratio < 0.4 else self.broker.getvalue() * 0.4
+        mode = config.params.main.mode
+        contractSize = self.scalar[name] if cash_ratio > 0.4 else self.bt[name]  # config.get_contract_parameter(name, "size")
+        multiplier = config.get_contract_parameter(name, "multiplier")
+        sectype = config.get_contract_parameter(name, "sectype")
+
+        if mode == "live":
+            margin = utils.ibPricing(data._name)["margin"]
+        else:
+            margin = config.get_contract_parameter(name, "margin")
+
+        if not position:
+            if self.p.percentSizer:
+                if sectype == "FUT":
+                    size = (accvalue * (contractSize / 100)) / margin
+                    if size > max_volume:
+                        size = max_volume
+                else:
+                    size = (accvalue * (contractSize / 100)) / (data.close[0] * multiplier)
+                    if size > max_volume:
+                        size = max_volume
+                logging.debug("Percent Sizer:", self.p.percentSizer, "Contract Size:", contractSize)
+            else:
+                size = contractSize
+        else:
+            size = position.size
+
+        if self.p.retint:
+            size = int(size)
+
+        return size
+
+class AverageTrueRangeTrailStop(bt.Indicator):
+    '''
+    Defined by J. Welles Wilder, Jr. in 1978 in his book *"New Concepts in
+    Technical Trading Systems"*.
+
+    The idea is to take the close into account to calculate the range if it
+    yields a larger range than the daily range (High - Low)
+
+    Formula:
+      - SmoothedMovingAverage(TrueRange, period)
+
+    See:
+      - http://en.wikipedia.org/wiki/Average_true_range
+    '''
+    alias = ('ATRTS',)
+
+    lines = ('atr', 'pdist', 'pstop',)
+    params = (('atrperiod', 14), ('atrdist', 3), ("mode", None))
+    plotinfo = dict(subplot=False)
+    plotlines = dict(pstop_long=dict(color='blue', ls='--', _plotskip=False,),
+                     pstop_short=dict(color='black', ls='-', _plotskip=False),
+                     )
+
+    def __init__(self):
+        self.lines.atr = bt.indicators.AverageTrueRange(period=self.p.atrperiod)
+        self.lines.pdist = self.lines.atr * self.p.atrdist
+        self._tradeopen = list()
+        self._longshort = False
+        self._tradeclose = list()
+        self._pstop_available = None
+        self._previous_open_position = None
+        self._previous_value = None
+        self._live = None
+        self._name = self.data._name.split("-")[0]
+        if self.p.mode == "live":
+            self._live = True
+
+        super(AverageTrueRangeTrailStop, self).__init__()
+
+    def sign_function(self, x):
+        if x > 0:
+            return 1
+        elif x == 0:
+            return 0
+        else:
+            return -1
+
+    def tradeopen(self, data, size):
+        self._tradeopen.append(data)
+        self._longshort = self.sign_function(size)
+        print("Data Size", self.data.size)
+
+    def tradeclose(self, data):
+        self._tradeopen.remove(data)
+        self._tradeclose.append(data)
+
+    def existing_position(self, pos):
+        pass
+
+    def datastatus(self, dataislive):
+        pass
+    def existing_pstop(self, data, value, size):
+        self._previous_value = value
+        self._previous_open_position = size
+        print(self._previous_value, self._previous_open_position)
+        if value and size:
+            self._pstop_available = True
+            self.tradeopen(data, size)
+            print("Set for success")
+
+    def next(self):
+
+        if self._live:
+            pass
+            '''
+            pos = bt.broker.BrokerBase.getposition(self, data=self.data).size
+            if pos:
+                if self.data in self._tradeopen:
+                    pass
+                else:
+                    self._tradeopen.append(self.data)
+            if not pos:
+                if self.data in self._tradeclose:
+                    pass
+                else:
+                    if self._longshort:
+                        self._tradeclose.append(self.data)
+            '''
+        for d in self._tradeopen:
+            if d == self.data:
+
+                if self._pstop_available:
+                    self.lines.pstop[0] = self._previous_value
+                    self._pstop_available = False
+                    print("Updating P-stop to value found in file:", self._previous_value)
+
+                elif not self.lines.pstop[-1]:
+
+                    pstop_long = self.data.close[0] - self.lines.pdist[0]
+                    pstop_short = self.data.close[0] + self.lines.pdist[0]
+
+                    if self._longshort == 1:
+                        self.lines.pstop[0] = pstop_long
+                    elif self._longshort == -1:
+                        self.lines.pstop[0] = pstop_short
+
+                else:
+
+                    if self._longshort == 1:
+                        self.lines.pstop[0] = max(self.data.close[0] - self.lines.pdist[0], self.lines.pstop[-1])
+                    elif self._longshort == -1:
+                        self.lines.pstop[0] = min(self.data.close[0] + self.lines.pdist[0], self.lines.pstop[-1])
+
+                if self._live:
+                    if self.lines.pstop[-1] != self.lines.pstop[0]:
+                        pass
+                        # jsonfile.updateFile("contract", self._name, {"pstop": self.lines.pstop[0]})
+                        # print("P-stop updated in file")
+                """
+                print("Data=", self.data._name, "ATRTS Data Close", round(self.data.close[0], 2), "ATR",
+                      round(self.lines.atr[0], 2), "ATR TS Pdist", round(self.lines.pdist[0], 2), "ATR TS Pstop",
+                      round(self.lines.pstop[0], 2))
+                """
+
+        for d in self._tradeclose:
+            if d == self.data:
+                #print("ATR TS Reset due to trade closed")
+                self.lines.pstop[0] = float("nan")
+                self._tradeclose.remove(d)
+                self._longshort = False
+
+                if self._live:
+                    jsonfile.updateFile("contract", self._name, {"pstop-1": None})
+                    print("P-stop cleared in file")
 
 
 class PNL(bt.Indicator):
@@ -193,6 +397,7 @@ class StatPercentile(bt.Indicator):
         self.scale = Tparameters[2]
     """
 
+
 class MFI(bt.Indicator):
     lines = ('mfi',)
     params = dict(period=14)
@@ -208,6 +413,199 @@ class MFI(bt.Indicator):
 
         mfiratio = bt.ind.DivByZero(flowpos, flowneg, zero=100.0)
         self.l.mfi = 100.0 - 100.0 / (1.0 + mfiratio)
+
+
+class EWMACD(bt.Indicator):
+    '''
+
+    '''
+    lines = ("std_dev", 'ewmacd', "ac_raw_ewmacd", "max", "min")
+    #params = (('Lfast', [4, 8, 16, 32, 64]), ('Lslow', [16, 32, 64, 128, 256]), ('std_dev_period', 25),)
+    params = (('macd1', [8, 16, 32, 64, 128, 256]), ('macd2', [16, 32, 64, 128, 256, 512]), ("macdsig", [4, 8, 16, 32, 64, 128]), ('std_dev_period', 25),)
+    plotinfo = dict()
+    plotlines = dict(ac_raw_ewmacd=dict(_plotskip=True), std_dev=dict(_plotskip=True))
+
+    def ewmacd_forecast_scalar(self, macd1, macd2, macdsig):
+        """
+        Function to return the forecast scalar (table 49 of the book)
+
+        Only defined for certain values
+        """
+        fsdict = dict(m4_8_2=100.6, m8_16_4=70.5, m16_32_8=50.3, m32_64_16=30.75, m64_128_32=20.65, m128_256_64=10.87, m256_512_128=5.5)
+        #fsdict = dict(l2_8=0.53, l4_16=0.375, l8_32=0.265, l16_64=3.75, l32_128=2.65, l64_256=1.87)
+
+        mkey = "m%d_%d_%d" % (macd1, macd2, macdsig)
+
+        if mkey in fsdict:
+            return fsdict[mkey]
+        else:
+            print(f"Warning: No scalar defined for macd1={macd1}, macd2={macd2}, macdsig{macdsig} using default of 1.0")
+            return 1.0
+
+    def ewmacd_forecast_weights(self, macd1, macd2, macdsig):
+        """
+        Function to return the forecast scalar (table 49 of the book)
+
+        Only defined for certain values
+        """
+
+        #fwdict = dict(l2_8=0.42, l4_16=0.16, l8_32=0.42, l16_64=1, l32_128=1, l64_256=0.3)
+        #fwdict = dict(l2_8=0.00, l4_16=0.05, l8_32=0.15, l16_64=0.2, l32_128=0.3, l64_256=0.3)
+        #fwdict = dict(m4_8_2=0.01, m8_16_4=0.04, m16_32_8=0.15, m32_64_16=0.2, m64_128_32=0.3, m128_256_64=0.3)
+        fwdict = dict(m4_8_2=0.0, m8_16_4=0.0, m16_32_8=0.0, m32_64_16=0.2, m64_128_32=0.2, m128_256_64=0.2, m256_512_128=0.2)
+        mkey = "m%d_%d_%d" % (macd1, macd2, macdsig)
+
+        if mkey in fwdict:
+            return fwdict[mkey]
+        else:
+            print(f"Warning: No scalar defined for macd1={macd1}, macd2={macd2}, macdsig{macdsig} using default of 1.0")
+            return 1.0
+
+    def calc_ewmacd(self, std_dev, macd1, macd2, macdsig):
+        """
+        Calculate the ewmac trading fule forecast, given a price and EWMA speeds Lfast, Lslow and vol_lookback
+        Assumes that 'price' and vol is daily data
+        This version uses a precalculated price volatility, and does not do capping or scaling
+        :param price: The price or other series to use (assumed Tx1)
+        :type price: pd.Series
+        :param vol: The daily price unit volatility (NOT % vol)
+        :type vol: pd.Series aligned to price
+        :param Lfast: Lookback for fast in days
+        :type Lfast: int
+        :param Lslow: Lookback for slow in days
+        :type Lslow: int
+        :returns: pd.DataFrame -- unscaled, uncapped forecast
+        """
+        # price: This is the stitched price series
+        # We can't use the price of the contract we're trading, or the volatility will be jumpy
+        # And we'll miss out on the rolldown. See
+        # https://qoppac.blogspot.com/2015/05/systems-building-futures-rolling.html
+
+        # We don't need to calculate the decay parameter, just use the span
+        # directly
+
+        ewmacd = bt.ind.MACD(self.data.close, period_me1=macd1, period_me2=macd2, period_signal=macdsig,
+                             subplot=False,
+                             plot=True)
+
+        raw_ewmacd = ewmacd.macd - ewmacd.signal
+
+        return bt.DivByZero(raw_ewmacd, std_dev)
+
+    def __init__(self):
+        full_ewmacd = list()
+        #hl3 = (self.data.close + self.data.high + self.data.low)/3
+        #returns = bt.ind.PctChange(self.data.close, period=self.p.std_dev_period) * 100
+        daily_change = self.data.close(0) - self.data.close(-1)
+        std_dev = bt.ind.StdDev(daily_change, period=self.p.std_dev_period)
+
+        for i, (m1, m2, s) in enumerate(zip(self.p.macd1, self.p.macd2, self.p.macdsig)):
+            f_scalar = self.ewmacd_forecast_scalar(m1, m2, s)
+            f_weights = self.ewmacd_forecast_weights(m1, m2, s)
+            full_ewmacd.append(self.calc_ewmacd(std_dev, m1, m2, s) * f_scalar * f_weights)
+
+        raw_ewmacd = sum(full_ewmacd)
+
+        self.lines.std_dev = std_dev
+        self.lines.ewmacd = raw_ewmacd #* f_scalar #bt.DivByZero(raw_ewmac, std_dev) * f_scalar
+        self.lines.ac_raw_ewmacd = bt.ind.Accum(abs(raw_ewmacd))
+        self.lines.max = bt.ind.Max(raw_ewmacd)
+        self.lines.min = bt.ind.Min(raw_ewmacd)
+
+
+class EWMAC(bt.Indicator):
+    '''
+
+    '''
+    lines = ("std_dev", 'ewmac', "ac_raw_ewmac", "max", "min")
+    #params = (('Lfast', [4, 8, 16, 32, 64]), ('Lslow', [16, 32, 64, 128, 256]), ('std_dev_period', 25),)
+    params = (('Lfast', [4, 8, 16, 32, 64, 128]), ('Lslow', [16, 32, 64, 128, 256, 512]), ('std_dev_period', 25),)
+    plotinfo = dict()
+    plotlines = dict(ac_raw_ewmac=dict(_plotskip=True))
+
+    def ewmac_forecast_scalar(self, lfast, lslow):
+        """
+        Function to return the forecast scalar (table 49 of the book)
+
+        Only defined for certain values
+        """
+        fsdict = dict(l2_8=10.6, l4_16=7.5, l8_32=5.3, l16_64=3.75, l32_128=2.65, l64_256=1.87, l128_512=0.94)
+        #fsdict = dict(l2_8=0.53, l4_16=0.375, l8_32=0.265, l16_64=3.75, l32_128=2.65, l64_256=1.87)
+
+        lkey = "l%d_%d" % (lfast, lslow)
+
+        if lkey in fsdict:
+            return fsdict[lkey]
+        else:
+            print(f"Warning: No scalar defined for Lfast={lfast}, Lslow={lslow} using default of 1.0")
+            return 1.0
+
+    def ewmac_forecast_weights(self, lfast, lslow):
+        """
+        Function to return the forecast scalar (table 49 of the book)
+
+        Only defined for certain values
+        """
+
+        #fwdict = dict(l2_8=0.42, l4_16=0.16, l8_32=0.42, l16_64=1, l32_128=1, l64_256=0.3)
+        #fwdict = dict(l2_8=0.00, l4_16=0.05, l8_32=0.15, l16_64=0.2, l32_128=0.3, l64_256=0.3)
+        fwdict = dict(l2_8=0, l4_16=0.15, l8_32=0.15, l16_64=0.15, l32_128=0.25, l64_256=0.15, l128_512=0.15)
+        lkey = "l%d_%d" % (lfast, lslow)
+
+        if lkey in fwdict:
+            return fwdict[lkey]
+        else:
+            print(f"Warning: No scalar defined for Lfast={lfast}, Lslow={lslow} using default of 1.0")
+            return 1.0
+
+    def calc_ewmac(self, std_dev, Lfast, Lslow):
+        """
+        Calculate the ewmac trading fule forecast, given a price and EWMA speeds Lfast, Lslow and vol_lookback
+        Assumes that 'price' and vol is daily data
+        This version uses a precalculated price volatility, and does not do capping or scaling
+        :param price: The price or other series to use (assumed Tx1)
+        :type price: pd.Series
+        :param vol: The daily price unit volatility (NOT % vol)
+        :type vol: pd.Series aligned to price
+        :param Lfast: Lookback for fast in days
+        :type Lfast: int
+        :param Lslow: Lookback for slow in days
+        :type Lslow: int
+        :returns: pd.DataFrame -- unscaled, uncapped forecast
+        """
+        # price: This is the stitched price series
+        # We can't use the price of the contract we're trading, or the volatility will be jumpy
+        # And we'll miss out on the rolldown. See
+        # https://qoppac.blogspot.com/2015/05/systems-building-futures-rolling.html
+
+        # We don't need to calculate the decay parameter, just use the span
+        # directly
+        fast_ewma = bt.ind.ExponentialMovingAverage(self.data.close, period=Lfast)
+        slow_ewma = bt.ind.ExponentialMovingAverage(self.data.close, period=Lslow)
+        raw_ewmac = fast_ewma - slow_ewma
+
+        return bt.DivByZero(raw_ewmac, std_dev)
+
+    def __init__(self):
+        full_ewmac = list()
+        #hl3 = (self.data.close + self.data.high + self.data.low)/3
+        #returns = bt.ind.PctChange(self.data.close, period=self.p.std_dev_period) * 100
+        daily_change = self.data.close(0) - self.data.close(-1)
+        std_dev = bt.ind.StdDev(daily_change, period=self.p.std_dev_period)
+
+
+        for i, (f, s) in enumerate(zip(self.p.Lfast, self.p.Lslow)):
+            f_scalar = self.ewmac_forecast_scalar(f, s)
+            f_weights = self.ewmac_forecast_weights(f, s)
+            full_ewmac.append(self.calc_ewmac(std_dev, f, s) * f_scalar * f_weights)
+
+        raw_ewmac = sum(full_ewmac)
+
+        self.lines.std_dev = std_dev
+        self.lines.ewmac = raw_ewmac #* f_scalar #bt.DivByZero(raw_ewmac, std_dev) * f_scalar
+        self.lines.ac_raw_ewmac = bt.ind.Accum(abs(raw_ewmac))
+        self.lines.max = bt.ind.Max(raw_ewmac)
+        self.lines.min = bt.ind.Min(raw_ewmac)
 
 class Stochastic_Generic(bt.Indicator):
     '''

@@ -64,6 +64,9 @@ class runCerebro:
         self.longCompression = COMP[self.longCandleSize]
         self.startDate = config.get_strategy_parameter(strategy, "start_date")
         self.endDate = config.get_strategy_parameter(strategy, "end_date")
+        self.sessionStart = config.get_strategy_parameter(strategy, "session_start")
+        self.sessionEnd = config.get_strategy_parameter(strategy, "session_end")
+        self.sessionTimes = config.get_strategy_parameter(strategy, "session_times")
         # Initialize cerebro
         maxCpu = 8 if self.mode == "optimize" else 1
         stdStats = False if self.mode == "optimize" else True
@@ -130,6 +133,8 @@ class runCerebro:
         # Parse dates
         startYear, startMonth, startDay = utils.parseDates(self.startDate)
         endYear, endMonth, endDay = utils.parseDates(self.endDate)
+        startHours, startMinutes, startSeconds = utils.parseTimes(self.sessionStart)
+        endHours, endMinutes, endSeconds = utils.parseTimes(self.sessionEnd)
         # Cycle through provided datas
         for contract in self.slicedDatadic.keys():
             for n, dataname in enumerate(self.slicedDatadic[contract]):
@@ -142,26 +147,40 @@ class runCerebro:
 
                 # If data enumerate is 0 or even
                 # for single data the default data to load will be the shorter candles data
-                if (n % 2) == 0:
+                if self.dualData:
+                    if (n % 2) == 0:
+                        timeFrame = self.timeFrame
+                        compression = self.compression
+                        plotEnabled = True
+                    else:
+                        timeFrame = self.longTimeFrame
+                        compression = self.longCompression
+                        plotEnabled = False
+                else:
                     timeFrame = self.timeFrame
                     compression = self.compression
                     plotEnabled = True
-                else:
-                    timeFrame = self.longTimeFrame
-                    compression = self.longCompression
-                    plotEnabled = False
 
+                # Select session Times
+                data_kwargs = dict(fromdate=datetime.datetime(startYear, startMonth, startDay),
+                                   todate=datetime.datetime(endYear, endMonth, endDay),
+                                   dataname=datas,
+                                   timeframe=timeFrame,
+                                   compression=compression)
+                if self.sessionTimes:
+                    data_kwargs.update(dict(sessionstart=datetime.time(startHours, startMinutes, startSeconds),
+                                            sessionend=datetime.time(endHours, endMinutes, endSeconds)))
                 # Load ordered candles datas
-                data = bt.feeds.PandasData(
-                                            fromdate=datetime.datetime(startYear, startMonth, startDay),
-                                            todate=datetime.datetime(endYear, endMonth, endDay),
-                                            dataname=datas,
-                                            timeframe=timeFrame,
-                                            compression=compression)
+                data = bt.feeds.PandasData(**data_kwargs)
+
                 if timeFrame != bt.TimeFrame.Days:
                     if timeFrame != bt.TimeFrame.Weeks:
                         if timeFrame != bt.TimeFrame.Months:
-                            data.addfilter(btfilters.SessionFiller)
+                            if self.sessionTimes:
+                                data.addfilter(btfilters.SessionFilter)
+                            else:
+                                data.addfilter(btfilters.SessionFiller)
+
                 data1 = self.cerebro.adddata(data, name=dataname)
                 # Select plot enabled for data
                 data1.plotinfo.plot = plotEnabled
@@ -179,7 +198,7 @@ class runCerebro:
         self.timer.printElapsedTime()
 
         # Plot Analyzer results for each strategy
-        if self.plotResults:
+        if self.plotResults and self.mode != "optimize":
             self.cerebro.plot(style='candlestick')
 
         return cerebroResults
